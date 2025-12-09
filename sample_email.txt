@@ -1,0 +1,752 @@
+
+import nodemailer from "nodemailer";
+
+interface EmailConfig {
+	to: string;
+	subject: string;
+	html: string;
+	bcc?: string | string[];
+}
+
+class EmailService {
+	private transporter: nodemailer.Transporter;
+
+	constructor() {
+		const emailProvider = process.env.EMAIL_PROVIDER || "gmail";
+
+		switch (emailProvider) {
+			case "gmail":
+				this.transporter = nodemailer.createTransport({
+					service: "gmail",
+					auth: {
+						user: process.env.EMAIL_FROM,
+						pass: process.env.EMAIL_PASSWORD,
+					},
+				});
+				break;
+
+			case "sendgrid":
+				this.transporter = nodemailer.createTransport({
+					host: "smtp.sendgrid.net",
+					port: 587,
+					secure: false,
+					auth: {
+						user: "apikey",
+						pass: process.env.SENDGRID_API_KEY,
+					},
+				});
+				break;
+
+			case "resend":
+				this.transporter = nodemailer.createTransport({
+					host: "smtp.resend.com",
+					port: 587,
+					secure: false,
+					auth: {
+						user: "resend",
+						pass: process.env.RESEND_API_KEY,
+					},
+				});
+				break;
+
+			default:
+				// For development/testing, use a mock transporter
+				this.transporter = nodemailer.createTransport({
+					host: "localhost",
+					port: 1025,
+					secure: false,
+					ignoreTLS: true,
+				});
+		}
+	}
+
+	async sendEmail(config: EmailConfig): Promise<boolean> {
+		try {
+			const mailOptions = {
+				from: `"Nikolai from CISCO DevTeam" <${process.env.EMAIL_FROM || "noreply@campus-life-interface.com"}>`,
+				to: config.to,
+				subject: config.subject,
+				html: config.html,
+				bcc: config.bcc,
+			};
+
+			await this.transporter.sendMail(mailOptions);
+			console.log(`Email sent successfully to ${config.to}`);
+			return true;
+		} catch (error) {
+			console.error("Failed to send email:", error);
+			return false;
+		}
+	}
+
+	async sendReceiptEmail(params: {
+		email: string;
+		customerName: string;
+		transactionId: string;
+		organizationName?: string;
+		items?: Array<{
+			name: string;
+			quantity: number;
+			unitPrice: number;
+			lineTotal?: number;
+		}>;
+		itemName?: string;
+		quantity?: number;
+		unitPrice?: number;
+		totalPrice: number;
+		issuedAt?: Date;
+	}): Promise<boolean> {
+		const php = new Intl.NumberFormat("en-PH", {
+			style: "currency",
+			currency: "PHP",
+		});
+		const issued = params.issuedAt ?? new Date();
+		const issuedDate = issued.toLocaleString("en-PH", {
+			dateStyle: "medium",
+			timeStyle: "short",
+		});
+		const subject = `Receipt - ${params.organizationName ? `${params.organizationName} - ` : ""}${params.transactionId}`;
+
+		const rowsHtml =
+			params.items && params.items.length > 0
+				? params.items
+						.map(
+							(it) => `
+				<tr>
+					<td>${it.name}</td>
+					<td style="text-align:right;">${it.quantity}</td>
+					<td style="text-align:right;">${php.format(it.unitPrice)}</td>
+					<td style="text-align:right; font-weight:600;">${php.format(it.lineTotal ?? it.unitPrice * it.quantity)}</td>
+				</tr>
+			`,
+						)
+						.join("")
+				: `
+				<tr>
+					<td>${params.itemName ?? "Merch Item"}</td>
+					<td style="text-align:right;">${params.quantity ?? 1}</td>
+					<td style="text-align:right;">${php.format(params.unitPrice ?? 0)}</td>
+					<td style="text-align:right; font-weight:600;">${php.format(params.totalPrice)}</td>
+				</tr>`;
+
+		const html = `
+			<!DOCTYPE html>
+			<html>
+			<head>
+				<meta charset="utf-8">
+				<meta name="viewport" content="width=device-width, initial-scale=1.0">
+				<title>Electronic Receipt - Campus Life Interface</title>
+				<style>
+					body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+					.container { max-width: 640px; margin: 0 auto; padding: 20px; }
+					.header { background: linear-gradient(135deg, #1752F0 0%, #0f3bb8 100%); color: white; padding: 24px; text-align: center; border-radius: 10px 10px 0 0; }
+					.content { background: #f9f9f9; padding: 24px; border-radius: 0 0 10px 10px; }
+					.table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+					.table th, .table td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #e5e7eb; }
+					.table th { background: #eef2ff; }
+					.summary { margin-top: 16px; text-align: right; }
+					.footer { text-align: center; margin-top: 24px; color: #666; font-size: 14px; }
+				</style>
+			</head>
+			<body>
+				<div class="container">
+					<div class="header">
+						<h1>Official Electronic Receipt</h1>
+						<p>CISCO DevTeam &middot; Campus Life Interface${params.organizationName ? ` &middot; ${params.organizationName}` : ""}</p>
+					</div>
+					<div class="content">
+						<p>Hi ${params.customerName},</p>
+						<p>Thank you for your purchase. Below are the details of your transaction.</p>
+
+						<table class="table" role="presentation">
+							<tr>
+								<th scope="row">Transaction ID</th>
+								<td>${params.transactionId}</td>
+							</tr>
+							<tr>
+								<th scope="row">Date</th>
+								<td>${issuedDate}</td>
+							</tr>
+							${params.organizationName ? `<tr><th scope="row">Organization</th><td>${params.organizationName}</td></tr>` : ""}
+						</table>
+
+						<h3 style="margin-top:16px;">Items</h3>
+						<table class="table" role="presentation">
+							<thead>
+								<tr>
+									<th>Item</th>
+									<th style="text-align:right;">Qty</th>
+									<th style="text-align:right;">Unit Price</th>
+									<th style="text-align:right;">Line Total</th>
+								</tr>
+							</thead>
+							<tbody>
+								${rowsHtml}
+							</tbody>
+							<tfoot>
+								<tr>
+									<td colspan="3" style="text-align:right; font-weight:600;">Grand Total</td>
+									<td style="text-align:right; font-weight:700;">${php.format(params.totalPrice)}</td>
+								</tr>
+							</tfoot>
+						</table>
+
+						<p>If you have any questions regarding this receipt, please reply to this email.</p>
+
+						<br><br>--
+						<br><strong>Nikolai Tristan E. Pazon</strong>
+						<br>Vice-President for Finance | Computer and Information Sciences Council
+						<br><a href='http://dcism.org'>Department of Computer, Information Sciences, and Mathematics</a>
+						<br><span style='color: green;'>UNIVERSITY OF SAN CARLOS</span>
+						<br><em style='color: green;'>The content of this email is confidential and is intended for the recipient specified in message only. It is strictly forbidden to share any part of this message with any third party without the express consent of the sender. If you received this message by mistake, please reply to this message and follow with its deletion, so that we can ensure such a mistake does not occur in the future.
+						</em>
+					</div>
+					<div class="footer">
+						<p>&copy; 2024 Campus Life Interface. All rights reserved.</p>
+						<p>This email was sent to ${params.email}</p>
+					</div>
+				</div>
+			</body>
+			</html>
+		`;
+
+		return this.sendEmail({
+			to: params.email,
+			subject,
+			html,
+			bcc: "21102134@usc.edu.ph",
+		});
+	}
+
+	async sendOrderReceivedEmail(params: {
+		email: string;
+		customerName: string;
+		orderId: string;
+		organizationName?: string;
+		items?: Array<{
+			name: string;
+			quantity: number;
+			unitPrice: number;
+			lineTotal?: number;
+		}>;
+		totalPrice: number;
+		issuedAt?: Date;
+	}): Promise<boolean> {
+		const php = new Intl.NumberFormat("en-PH", {
+			style: "currency",
+			currency: "PHP",
+		});
+		const issued = params.issuedAt ?? new Date();
+		const issuedDate = issued.toLocaleString("en-PH", {
+			dateStyle: "medium",
+			timeStyle: "short",
+		});
+		const subject = `Order Received - ${params.organizationName ? `${params.organizationName} - ` : ""}${params.orderId}`;
+
+		const rowsHtml =
+			params.items && params.items.length > 0
+				? params.items
+						.map(
+							(it) => `
+        <tr>
+          <td>${it.name}</td>
+          <td style="text-align:right;">${it.quantity}</td>
+          <td style="text-align:right;">${php.format(it.unitPrice)}</td>
+          <td style="text-align:right; font-weight:600;">${php.format(it.lineTotal ?? it.unitPrice * it.quantity)}</td>
+        </tr>
+      `,
+						)
+						.join("")
+				: "";
+
+		const html = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Order Received - Campus Life Interface</title>
+        <style>
+          body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+          .container { max-width: 640px; margin: 0 auto; padding: 20px; }
+          .header { background: linear-gradient(135deg, #1752F0 0%, #0f3bb8 100%); color: white; padding: 24px; text-align: center; border-radius: 10px 10px 0 0; }
+          .content { background: #f9f9f9; padding: 24px; border-radius: 0 0 10px 10px; }
+          .table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+          .table th, .table td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #e5e7eb; }
+          .table th { background: #eef2ff; }
+          .summary { margin-top: 16px; text-align: right; }
+          .footer { text-align: center; margin-top: 24px; color: #666; font-size: 14px; }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <h1>Order Received</h1>
+            <p>CISCO DevTeam &middot; Campus Life Interface${params.organizationName ? ` &middot; ${params.organizationName}` : ""}</p>
+          </div>
+          <div class="content">
+            <p>Hi ${params.customerName},</p>
+            <p>We received your order. Below are the details.</p>
+
+            <table class="table" role="presentation">
+              <tr>
+                <th scope="row">Order ID</th>
+                <td>${params.orderId}</td>
+              </tr>
+              <tr>
+                <th scope="row">Date</th>
+                <td>${issuedDate}</td>
+              </tr>
+              ${params.organizationName ? `<tr><th scope="row">Organization</th><td>${params.organizationName}</td></tr>` : ""}
+            </table>
+
+            ${
+							rowsHtml
+								? `
+              <h3 style="margin-top:16px;">Items</h3>
+              <table class="table" role="presentation">
+                <thead>
+                  <tr>
+                    <th>Item</th>
+                    <th style="text-align:right;">Qty</th>
+                    <th style="text-align:right;">Unit Price</th>
+                    <th style="text-align:right;">Line Total</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${rowsHtml}
+                </tbody>
+                <tfoot>
+                  <tr>
+                    <td colspan="3" style="text-align:right; font-weight:600;">Total</td>
+                    <td style="text-align:right; font-weight:700;">${php.format(params.totalPrice)}</td>
+                  </tr>
+                </tfoot>
+              </table>
+            `
+								: ""
+						}
+
+            <p>We will notify you when payment is confirmed and your order is ready for pickup or delivery.</p>
+          </div>
+          <div class="footer">
+            <p>&copy; 2024 Campus Life Interface. All rights reserved.</p>
+            <p>This email was sent to ${params.email}</p>
+          </div>
+        </div>
+      </body>
+      </html>
+    `;
+
+		return this.sendEmail({
+			to: params.email,
+			subject,
+			html,
+			bcc: "21102134@usc.edu.ph",
+		});
+	}
+
+	async sendPaymentConfirmedEmail(params: {
+		email: string;
+		customerName: string;
+		orderId: string;
+		organizationName?: string;
+		items?: Array<{
+			name: string;
+			quantity: number;
+			unitPrice: number;
+			lineTotal?: number;
+		}>;
+		totalPrice: number;
+		issuedAt?: Date;
+	}): Promise<boolean> {
+		const php = new Intl.NumberFormat("en-PH", {
+			style: "currency",
+			currency: "PHP",
+		});
+		const issued = params.issuedAt ?? new Date();
+		const issuedDate = issued.toLocaleString("en-PH", {
+			dateStyle: "medium",
+			timeStyle: "short",
+		});
+		const subject = `Payment Confirmed - ${params.organizationName ? `${params.organizationName} - ` : ""}${params.orderId}`;
+
+		const rowsHtml =
+			params.items && params.items.length > 0
+				? params.items
+						.map(
+							(it) => `
+        <tr>
+          <td>${it.name}</td>
+          <td style="text-align:right;">${it.quantity}</td>
+          <td style="text-align:right;">${php.format(it.unitPrice)}</td>
+          <td style="text-align:right; font-weight:600;">${php.format(it.lineTotal ?? it.unitPrice * it.quantity)}</td>
+        </tr>
+      `,
+						)
+						.join("")
+				: "";
+
+		const html = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Payment Confirmed - Campus Life Interface</title>
+        <style>
+          body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+          .container { max-width: 640px; margin: 0 auto; padding: 20px; }
+          .header { background: linear-gradient(135deg, #16a34a 0%, #15803d 100%); color: white; padding: 24px; text-align: center; border-radius: 10px 10px 0 0; }
+          .content { background: #f9f9f9; padding: 24px; border-radius: 0 0 10px 10px; }
+          .table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+          .table th, .table td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #e5e7eb; }
+          .table th { background: #ecfdf5; }
+          .summary { margin-top: 16px; text-align: right; }
+          .footer { text-align: center; margin-top: 24px; color: #666; font-size: 14px; }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <h1>Payment Confirmed</h1>
+            <p>CISCO DevTeam &middot; Campus Life Interface${params.organizationName ? ` &middot; ${params.organizationName}` : ""}</p>
+          </div>
+          <div class="content">
+            <p>Hi ${params.customerName},</p>
+            <p>We have received your payment for the order below. Thank you!</p>
+
+            <table class="table" role="presentation">
+              <tr>
+                <th scope="row">Order ID</th>
+                <td>${params.orderId}</td>
+              </tr>
+              <tr>
+                <th scope="row">Date</th>
+                <td>${issuedDate}</td>
+              </tr>
+              ${params.organizationName ? `<tr><th scope="row">Organization</th><td>${params.organizationName}</td></tr>` : ""}
+            </table>
+
+            ${
+							rowsHtml
+								? `
+              <h3 style="margin-top:16px;">Items</h3>
+              <table class="table" role="presentation">
+                <thead>
+                  <tr>
+                    <th>Item</th>
+                    <th style="text-align:right;">Qty</th>
+                    <th style="text-align:right;">Unit Price</th>
+                    <th style="text-align:right;">Line Total</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${rowsHtml}
+                </tbody>
+                <tfoot>
+                  <tr>
+                    <td colspan="3" style="text-align:right; font-weight:600;">Total</td>
+                    <td style="text-align:right; font-weight:700;">${php.format(params.totalPrice)}</td>
+                  </tr>
+                </tfoot>
+              </table>
+            `
+								: ""
+						}
+
+            <p>We’ll let you know once your order is ready for pickup or delivery.</p>
+          </div>
+          <div class="footer">
+            <p>&copy; 2024 Campus Life Interface. All rights reserved.</p>
+            <p>This email was sent to ${params.email}</p>
+          </div>
+        </div>
+      </body>
+      </html>
+    `;
+
+		return this.sendEmail({
+			to: params.email,
+			subject,
+			html,
+		});
+	}
+
+	async sendReadyForPickupEmail(params: {
+		email: string;
+		customerName: string;
+		orderId: string;
+		organizationName?: string;
+		items?: Array<{
+			name: string;
+			quantity: number;
+			unitPrice: number;
+			lineTotal?: number;
+		}>;
+		totalPrice: number;
+		adminMessage?: string;
+		issuedAt?: Date;
+	}): Promise<boolean> {
+		const php = new Intl.NumberFormat("en-PH", {
+			style: "currency",
+			currency: "PHP",
+		});
+		const issued = params.issuedAt ?? new Date();
+		const issuedDate = issued.toLocaleString("en-PH", {
+			dateStyle: "medium",
+			timeStyle: "short",
+		});
+		const subject = `Order Ready for Pickup - ${params.organizationName ? `${params.organizationName} - ` : ""}${params.orderId}`;
+
+		const rowsHtml =
+			params.items && params.items.length > 0
+				? params.items
+						.map(
+							(it) => `
+        <tr>
+          <td>${it.name}</td>
+          <td style="text-align:right;">${it.quantity}</td>
+          <td style="text-align:right;">${php.format(it.unitPrice)}</td>
+          <td style="text-align:right; font-weight:600;">${php.format(it.lineTotal ?? it.unitPrice * it.quantity)}</td>
+        </tr>
+      `,
+						)
+						.join("")
+				: "";
+
+		const safeMessage = (params.adminMessage ?? "")
+			.replace(/</g, "&lt;")
+			.replace(/>/g, "&gt;");
+
+		const html = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Order Ready for Pickup - Campus Life Interface</title>
+        <style>
+          body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+          .container { max-width: 640px; margin: 0 auto; padding: 20px; }
+          .header { background: linear-gradient(135deg, #2563eb 0%, #1e40af 100%); color: white; padding: 24px; text-align: center; border-radius: 10px 10px 0 0; }
+          .content { background: #f9fafb; padding: 24px; border-radius: 0 0 10px 10px; }
+          .note { margin-top: 16px; background: #eef2ff; border-left: 4px solid #3b82f6; padding: 12px; border-radius: 6px; }
+          .table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+          .table th, .table td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #e5e7eb; }
+          .table th { background: #eef2ff; }
+          .footer { text-align: center; margin-top: 24px; color: #666; font-size: 14px; }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <h1>Your Order is Ready for Pickup</h1>
+            <p>CISCO DevTeam &middot; Campus Life Interface${params.organizationName ? ` &middot; ${params.organizationName}` : ""}</p>
+          </div>
+          <div class="content">
+            <p>Hi ${params.customerName},</p>
+            <p>Your order is now ready for pickup. Please see the details below.</p>
+
+            <div class="note">
+              <strong>Message from admin:</strong>
+              <div style="white-space: pre-wrap; margin-top: 6px;">${safeMessage || "(No additional instructions provided)"}</div>
+            </div>
+
+            <table class="table" role="presentation">
+              <tr>
+                <th scope="row">Order ID</th>
+                <td>${params.orderId}</td>
+              </tr>
+              <tr>
+                <th scope="row">Date</th>
+                <td>${issuedDate}</td>
+              </tr>
+              ${params.organizationName ? `<tr><th scope="row">Organization</th><td>${params.organizationName}</td></tr>` : ""}
+            </table>
+
+            ${
+							rowsHtml
+								? `
+              <h3 style="margin-top:16px;">Items</h3>
+              <table class="table" role="presentation">
+                <thead>
+                  <tr>
+                    <th>Item</th>
+                    <th style="text-align:right;">Qty</th>
+                    <th style="text-align:right;">Unit Price</th>
+                    <th style="text-align:right;">Line Total</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${rowsHtml}
+                </tbody>
+                <tfoot>
+                  <tr>
+                    <td colspan="3" style="text-align:right; font-weight:600;">Total</td>
+                    <td style="text-align:right; font-weight:700;">${php.format(params.totalPrice)}</td>
+                  </tr>
+                </tfoot>
+              </table>
+            `
+								: ""
+						}
+
+            <p>Thank you for your order! If you have any questions, simply reply to this email.</p>
+          </div>
+          <div class="footer">
+            <p>&copy; 2024 Campus Life Interface. All rights reserved.</p>
+            <p>This email was sent to ${params.email}</p>
+          </div>
+        </div>
+      </body>
+      </html>
+    `;
+
+		return this.sendEmail({
+			to: params.email,
+			subject,
+			html,
+		});
+	}
+	async sendVerificationEmail(
+		email: string,
+		token: string,
+		name: string,
+	): Promise<boolean> {
+		const verificationUrl = `${process.env.CORS_ORIGIN}/verify?token=${token}`;
+
+		const html = `
+			<!DOCTYPE html>
+			<html>
+			<head>
+				<meta charset="utf-8">
+				<meta name="viewport" content="width=device-width, initial-scale=1.0">
+				<title>Verify Your Email - Campus Life Interface</title>
+				<style>
+					body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+					.container { max-width: 600px; margin: 0 auto; padding: 20px; }
+					.header { background: linear-gradient(135deg, #1752F0 0%, #0f3bb8 100%); color: white; padding: 30px; text-align: center; border-radius: 10px 10px 0 0; }
+					.content { background: #f9f9f9; padding: 30px; border-radius: 0 0 10px 10px; }
+					.button { display: inline-block; background: #1752F0; color: white; padding: 15px 30px; text-decoration: none; border-radius: 5px; margin: 20px 0; }
+					.footer { text-align: center; margin-top: 30px; color: #666; font-size: 14px; }
+				</style>
+			</head>
+			<body>
+				<div class="container">
+					<div class="header">
+						<h1>Welcome to Campus Life Interface!</h1>
+						<p>Please verify your email address to get started</p>
+					</div>
+					<div class="content">
+						<h2>Hi ${name},</h2>
+						<p>Thank you for signing up for Campus Life Interface! To complete your registration and start connecting with your campus community, please verify your email address.</p>
+						
+						<div style="text-align: center;">
+							<a href="${verificationUrl}" class="button">Verify Email Address</a>
+						</div>
+						
+						<p>If the button above doesn't work, you can copy and paste this link into your browser:</p>
+						<p style="word-break: break-all; color: #1752F0;">${verificationUrl}</p>
+						
+						<p>This verification link will expire in 24 hours for security reasons.</p>
+						
+						<p>If you didn't create an account with Campus Life Interface, you can safely ignore this email.</p>
+						
+						<br><br>--
+						<br><strong>Nikolai Tristan E. Pazon</strong>
+						<br>Vice-President for Finance | Computer and Information Sciences Council
+						<br><a href='http://dcism.org'>Department of Computer, Information Sciences, and Mathematics</a>
+						<br><span style='color: green;'>UNIVERSITY OF SAN CARLOS</span>
+						<br><em style='color: green;'>The content of this email is confidential and is intended for the recipient specified in message only. It is strictly forbidden to share any part of this message with any third party without the express consent of the sender. If you received this message by mistake, please reply to this message and follow with its deletion, so that we can ensure such a mistake does not occur in the future.
+						</em>
+					</div>
+					<div class="footer">
+						<p>&copy; 2024 Campus Life Interface. All rights reserved.</p>
+						<p>This email was sent to ${email}</p>
+					</div>
+				</div>
+			</body>
+			</html>
+		`;
+
+		return this.sendEmail({
+			to: email,
+			subject: "Verify Your Email - Campus Life Interface",
+			html,
+		});
+	}
+
+	async sendPasswordResetEmail(
+		email: string,
+		token: string,
+		name: string,
+	): Promise<boolean> {
+		const resetUrl = `${process.env.CORS_ORIGIN}/reset-password?token=${token}`;
+
+		const html = `
+			<!DOCTYPE html>
+			<html>
+			<head>
+				<meta charset="utf-8">
+				<meta name="viewport" content="width=device-width, initial-scale=1.0">
+				<title>Reset Your Password - Campus Life Interface</title>
+				<style>
+					body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+					.container { max-width: 600px; margin: 0 auto; padding: 20px; }
+					.header { background: linear-gradient(135deg, #1752F0 0%, #0f3bb8 100%); color: white; padding: 30px; text-align: center; border-radius: 10px 10px 0 0; }
+					.content { background: #f9f9f9; padding: 30px; border-radius: 0 0 10px 10px; }
+					.button { display: inline-block; background: #1752F0; color: white; padding: 15px 30px; text-decoration: none; border-radius: 5px; margin: 20px 0; }
+					.footer { text-align: center; margin-top: 30px; color: #666; font-size: 14px; }
+				</style>
+			</head>
+			<body>
+				<div class="container">
+					<div class="header">
+						<h1>Reset Your Password</h1>
+						<p>Campus Life Interface - Secure Account Recovery</p>
+					</div>
+					<div class="content">
+						<h2>Hi ${name},</h2>
+						<p>We received a request to reset your password for your Campus Life Interface account. If you made this request, please click the button below to create a new password.</p>
+						
+						<div style="text-align: center;">
+							<a href="${resetUrl}" class="button">Reset Password</a>
+						</div>
+						
+						<p>If the button above doesn't work, you can copy and paste this link into your browser:</p>
+						<p style="word-break: break-all; color: #1752F0;">${resetUrl}</p>
+						
+						<p>This password reset link will expire in 1 hour for security reasons.</p>
+						
+						<p><strong>If you didn't request a password reset, please ignore this email.</strong> Your password will remain unchanged, and your account will remain secure.</p>
+						
+						<p>For security reasons, this link can only be used once. If you need to reset your password again, please request a new reset link.</p>
+						
+						<br><br>--
+						<br><strong>Nikolai Tristan E. Pazon</strong>
+						<br>Vice-President for Finance | Computer and Information Sciences Council
+						<br><a href='http://dcism.org'>Department of Computer, Information Sciences, and Mathematics</a>
+						<br><span style='color: green;'>UNIVERSITY OF SAN CARLOS</span>
+						<br><em style='color: green;'>The content of this email is confidential and is intended for the recipient specified in message only. It is strictly forbidden to share any part of this message with any third party without the express consent of the sender. If you received this message by mistake, please reply to this message and follow with its deletion, so that we can ensure such a mistake does not occur in the future.
+						</em>
+					</div>
+					<div class="footer">
+						<p>&copy; 2024 Campus Life Interface. All rights reserved.</p>
+						<p>This email was sent to ${email}</p>
+					</div>
+				</div>
+			</body>
+			</html>
+		`;
+
+		return this.sendEmail({
+			to: email,
+			subject: "Reset Your Password - Campus Life Interface",
+			html,
+		});
+	}
+}
+
+export const emailService = new EmailService();
+

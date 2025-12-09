@@ -1,0 +1,16 @@
+
+desc existing_student_info;
+
+
+
+student_id	int(11)	NO		NULL		
+last_name	varchar(50)	NO		NULL		
+first_name	varchar(50)	NO		NULL		
+middle_name	varchar(50)	YES		NULL		
+program	varchar(50)	NO		NULL		
+email	varchar(100)	NO		NULL		
+program_code_backup	varchar(50)	YES		NULL		
+program_id	int(11)	YES		NULL		
+
+
+
